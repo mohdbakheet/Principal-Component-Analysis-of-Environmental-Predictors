@@ -1,0 +1,322 @@
+# Climate variables correlation selection
+```
+climate-variable-correlation-selection/
+├── README.md
+└── climate_variable_correlation_analysis_selection.Rmd
+```
+
+---
+
+### 1. README.md
+
+```markdown
+# Climate Variable Correlation Analysis and Selection
+
+**Author:** MB  
+**Date:** 2025‑03‑17  
+
+This repository contains an R Notebook (`.Rmd`) for loading WorldClim bioclimatic raster layers, computing a Pearson correlation matrix, visualizing correlations, and selecting a subset of least‑correlated variables. Once selected, these climate layers can be used to filter bird location data or feed into downstream machine‑learning models (e.g., random forest, MaxEnt) for species distribution or risk modeling.
+
+---
+
+## Repository Structure
+
+```
+
+├── README.md
+└── climate\_variable\_correlation\_analysis\_selection.Rmd
+
+````
+
+- **README.md**  
+  This file: a high‑level overview of the project, its purpose, and how to run it.
+
+- **climate_variable_correlation_analysis_selection.Rmd**  
+  The R Markdown notebook that:
+  1. Loads required libraries (`terra`, `corrplot`, `caret`, `usdm`, etc.).
+  2. Reads all 19 WorldClim TIFFs into a SpatRaster.
+  3. Crops to a North America extent.
+  4. Converts the raster stack to a data frame.
+  5. Computes and visualizes the Pearson correlation matrix.
+  6. Identifies and removes highly correlated variables (|r| ≥ 0.7).
+  7. (Optional) Runs a VIF analysis to further remove multicollinear layers.
+  8. (Example) Selects a fixed number (k = 4) of least‑correlated variables via combinatorial search.
+  9. (Optional) Builds a reduced SpatRaster of the final selected variables.
+
+---
+
+## Getting Started
+
+1. **Clone or download** this repository:
+   ```bash
+   git clone https://github.com/<your‑username>/climate-variable-correlation-selection.git
+   cd climate-variable-correlation-selection
+````
+
+2. **Place your WorldClim bioclimatic TIFF files** in a local folder (e.g., `~/Downloads/WorldClim/bio/`).
+   Update the `raster_dir` path inside `climate_variable_correlation_analysis_selection.Rmd` to point to that directory.
+
+3. **Open and run the notebook** in RStudio (or any R IDE that supports R Markdown):
+
+   * Install the required R packages if you haven’t already:
+
+     ```r
+     install.packages(c("terra", "corrplot", "caret", "usdm"))
+     ```
+   * Knit the `.Rmd` to PDF or HTML via RStudio’s Knit button, or run each code chunk interactively.
+
+4. **Inspect outputs**:
+
+   * The Pearson correlation heatmap (via `corrplot`).
+   * Console output listing variables removed (|r| ≥ 0.7) and those retained.
+   * (Optional) VIF‐based selections and “least‑correlated” combinations.
+
+---
+
+## How to Cite
+
+If you use this workflow in your publication, please cite:
+
+> MB (2025). *Climate Variable Correlation Analysis and Selection* (R Notebook).
+> GitHub repository: [https://github.com/](https://github.com/)\<your‑username>/climate-variable-correlation-selection
+
+---
+
+## License
+
+This repository is released under the [MIT License](LICENSE).
+
+````
+
+---
+
+### 2. climate_variable_correlation_analysis_selection.Rmd
+
+```markdown
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Climate Variable Correlation Analysis and Selection
+
+**Title:** Climate Variable Correlation Analysis and Selection  
+**Purpose:** Load bioclimatic raster layers, compute Pearson correlation matrix, visualize correlations, and select a subset of least‑correlated variables (either via a correlation cutoff or by choosing a fixed number of variables).  
+**Author:** MB  
+**Date:** 2025‑03‑17
+
+The WorldClim dataset—widely used in species distribution modeling—provides 19 standard bioclimatic variables (BIO1 through BIO19), averaged over the period 1970–2000. To reduce collinearity among these layers, we calculated a Pearson correlation matrix using all 19 rasters via the **ENMTools** package in R.
+
+To predict wild bird abundance, we link bird occurrence records with environmental predictors such as climate, land cover, and water proportion. All predictors are available as high‑resolution GeoTIFFs. After downloading the 19 bioclimatic variables from WorldClim, we apply Pearson’s correlation to identify and retain only the least‑correlated variables. Once selected, these climate layers guide the filtering of bird location data, which we then feed into machine learning models for further analysis.
+
+---
+
+## Bioclimatic Variable Definitions
+
+- **BIO1**  = Annual Mean Temperature  
+- **BIO2**  = Mean Diurnal Range (Mean of monthly (max temp – min temp))  
+- **BIO3**  = Isothermality (BIO2 / BIO7) × 100  
+- **BIO4**  = Temperature Seasonality (standard deviation × 100)  
+- **BIO5**  = Max Temperature of Warmest Month  
+- **BIO6**  = Min Temperature of Coldest Month  
+- **BIO7**  = Temperature Annual Range (BIO5 – BIO6)  
+- **BIO8**  = Mean Temperature of Wettest Quarter  
+- **BIO9**  = Mean Temperature of Driest Quarter  
+- **BIO10** = Mean Temperature of Warmest Quarter  
+- **BIO11** = Mean Temperature of Coldest Quarter  
+- **BIO12** = Annual Precipitation  
+- **BIO13** = Precipitation of Wettest Month  
+- **BIO14** = Precipitation of Driest Month  
+- **BIO15** = Precipitation Seasonality (Coefficient of Variation)  
+- **BIO16** = Precipitation of Wettest Quarter  
+- **BIO17** = Precipitation of Driest Quarter  
+- **BIO18** = Precipitation of Warmest Quarter  
+- **BIO19** = Precipitation of Coldest Quarter  
+
+---
+
+## 1. Load Required Libraries
+
+```r
+library(terra)     # For handling raster data (SpatRaster)
+library(corrplot)  # For plotting correlation matrices
+library(caret)     # For finding highly correlated features
+library(usdm)      # For Variance Inflation Factor (VIF) analysis
+````
+
+---
+
+## 2. Specify File Paths and Load Rasters
+
+```r
+# Directory containing WorldClim bioclimatic .tif files
+raster_dir <- "~/Downloads/H5 North America/H5 metadata sets/WorldClim data/bioclimatic"
+
+# List all .tif files in that directory
+raster_files <- list.files(
+  path       = raster_dir,
+  pattern    = "\\.tif$",
+  full.names = TRUE
+)
+
+# Load all bioclimatic rasters into a SpatRaster stack
+climate_stack <- rast(raster_files)
+```
+
+---
+
+## 3. Define North America Extent and Crop
+
+```r
+# Extent for North America: xmin = -170, xmax = -30, ymin = 5, ymax = 85
+na_extent <- ext(-170, -30, 5, 85)
+
+# Crop the climate stack to the North America bounding box
+climate_crop <- crop(climate_stack, na_extent)
+```
+
+---
+
+## 4. Convert Raster Stack to Data Frame
+
+```r
+# Convert the cropped SpatRaster to a data frame; drop rows where any band is NA
+climate_df <- as.data.frame(climate_crop, na.rm = TRUE)
+
+# Inspect structure to verify columns correspond to bioclimatic variables
+str(climate_df)
+# Each column should correspond to one bioclimatic variable (e.g., bio1, bio2, …)
+```
+
+---
+
+## 5. Compute Pearson Correlation Matrix
+
+```r
+# Compute correlation among all climate variables using complete observations
+cor_matrix <- cor(climate_df, use = "complete.obs")
+
+# Visualize the upper triangle of the correlation matrix
+corrplot(
+  cor_matrix,
+  method = "color",     # colored cells
+  type   = "upper",     # display only the upper half
+  tl.cex = 0.8,         # text label size
+  title  = "Pearson Correlation Matrix (Climate Variables)",
+  mar    = c(0, 0, 1, 0) # adjust margins to fit the title
+)
+```
+
+---
+
+## 6. Identify and Remove Highly Correlated Variables
+
+```r
+# (a) Using a correlation cutoff approach (e.g., |r| ≥ 0.7)
+#     findCorrelation returns indices of columns to remove
+high_corr_indices <- findCorrelation(
+  cor_matrix,
+  cutoff  = 0.7,    # threshold for absolute correlation
+  verbose = FALSE
+)
+
+# Names of variables flagged as highly correlated
+vars_to_remove <- colnames(climate_df)[high_corr_indices]
+
+# Print which variables will be dropped
+cat("Variables with |r| ≥ 0.7 that will be removed:\n")
+print(vars_to_remove)
+
+# Subset the data frame to exclude those columns
+climate_selected_df <- climate_df[, -high_corr_indices]
+
+# Names of remaining (least correlated) variables
+selected_vars <- colnames(climate_selected_df)
+cat("\nSelected variables (after correlation filtering):\n")
+print(selected_vars)
+```
+
+---
+
+## 7. (Optional) VIF Analysis
+
+```r
+# If you wish to check for multicollinearity via Variance Inflation Factor:
+# usdm::vifstep works on raster stacks or data frames; here we run it on the
+# original cropped SpatRaster.
+
+# Run VIF stepwise selection with threshold VIF < 10
+vif_result <- vifstep(climate_crop, th = 10)
+
+# Variables retained by VIF (i.e., VIF ≤ 10)
+vif_kept_vars <- vif_result@results$Variables
+
+cat("\nVariables retained by VIF (threshold = 10):\n")
+print(vif_kept_vars)
+
+# To extract those layers into a new SpatRaster stack:
+climate_vif_stack <- subset(climate_crop, vif_kept_vars)
+# Alternatively: climate_vif_stack <- climate_crop[[vif_kept_vars]]
+```
+
+---
+
+## 8. Selecting a Fixed Number of Least‑Correlated Variables
+
+*(Example: pick 4 variables whose pairwise correlations are minimized)*
+
+```r
+# Define a function to find, among all combinations of k variables,
+# the set whose maximum absolute pairwise correlation is as small as possible.
+find_least_correlated_subset <- function(cor_mat, k = 4) {
+  var_indices <- seq_len(ncol(cor_mat))
+  
+  # Generate all combinations of k indices
+  combo_indices <- combn(var_indices, k)
+  
+  best_combo      <- NULL
+  lowest_max_cor  <- Inf
+  
+  # Loop over each combination
+  for (i in seq_len(ncol(combo_indices))) {
+    idx_set <- combo_indices[, i]
+    sub_cor  <- cor_mat[idx_set, idx_set]
+    
+    # Compute the maximum absolute correlation (excluding diagonal)
+    max_cor_value <- max(abs(sub_cor[upper.tri(sub_cor)]))
+    
+    if (max_cor_value < lowest_max_cor) {
+      lowest_max_cor <- max_cor_value
+      best_combo     <- idx_set
+    }
+  }
+  
+  # Return the names of the variables in the best combination
+  return(colnames(cor_mat)[best_combo])
+}
+
+# Apply the function to pick 4 variables
+least_corr_vars <- find_least_correlated_subset(cor_matrix, k = 4)
+
+cat("\nFour least‑correlated variables (pairwise max |r| minimized):\n")
+print(least_corr_vars)
+```
+
+---
+
+## 9. (Optional) Create a Raster Stack of Selected Variables
+
+```r
+# If you want to build a new SpatRaster containing only the
+# "least_corr_vars" layers, do:
+climate_least_corr_stack <- subset(climate_crop, least_corr_vars)
+
+# Inspect the resulting SpatRaster
+climate_least_corr_stack
+```
+
+---
+
+```
+```
